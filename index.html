@@ -592,7 +592,12 @@ def _ser(o, depth=0):
 def _serialize_all():
     data = {}
     for k, v in list(globals().items()):
-        if k in _internal_names or k.startswith("__"):
+        # Скрываем ВСЕ служебные имена: заранее известные (_internal_names) и
+        # любые другие, начинающиеся с "_" (например, временные переменные,
+        # которые визуализатор создаёт на лету через ns.set(...) уже после
+        # того, как _internal_names был зафиксирован — раньше они утекали
+        # в вывод и путали новичков).
+        if k.startswith("_") or k in _internal_names:
             continue
         data[k] = _ser(v)
     return json.dumps(data)
