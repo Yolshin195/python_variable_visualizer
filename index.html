@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Визуализатор переменных Python</title>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js"></script>
+<style>
+  :root {
+    --bg: #14151f;
+    --panel: #1d1f2b;
+    --panel-2: #232537;
+    --border: #33364a;
+    --text: #e7e8f0;
+    --muted: #8b8da3;
+    --green: #4CAF50;
+    --green-glow: #6ee394;
+    --orange: #ffb74d;
+    --orange-glow: #ffd591;
+    --red: #ef5350;
+    --blue: #4fc3f7;
+    --purple: #b388ff;
+    --teal: #4dd0c9;
+    --pink: #f06292;
+    --yellow: #ffee58;
+    --gray: #78909c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', Roboto, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.25em; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 0.85em; }
+  #helpBtn {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 50%;
+    width: 30px; height: 30px;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  #helpBox {
+    display: none;
+    margin: 0 24px 16px;
+    padding: 14px 18px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 0.9em;
+    line-height: 1.6;
+  }
+  #helpBox b { color: var(--text); }
+  main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    padding: 0 24px 24px;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .panel h2 {
+    margin: 0;
+    font-size: 1em;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  textarea#codeInput {
+    width: 100%;
+    min-height: 220px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.95em;
+    resize: vertical;
+    line-height: 1.5;
+  }
+  #codeView {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 0;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.92em;
+    line-height: 1.6;
+    max-height: 320px;
+    overflow-y: auto;
+    display: none;
+  }
+  .code-line { display: flex; padding: 0 12px; white-space: pre-wrap; word-break: break-word; }
+  .code-line .ln { color: #55586e; width: 28px; flex-shrink: 0; user-select: none; text-align: right; margin-right: 10px; }
+  .code-line .lc { color: var(--text); }
+  .code-line.active-line { background: rgba(76, 175, 80, 0.18); border-left: 3px solid var(--green); }
+  .code-line.active-line .lc { color: #d7ffd9; }
+
+  .examples-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ex-btn {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.82em;
+    cursor: pointer;
+  }
+  .ex-btn:hover { color: var(--text); border-color: var(--green); }
+
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button.action {
+    padding: 9px 16px;
+    border: none;
+    border-radius: 7px;
+    background: var(--green);
+    color: #0d1a0e;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9em;
+  }
+  button.action.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.action.danger { background: var(--panel-2); color: var(--red); border: 1px solid var(--red); }
+  button.action:disabled { opacity: 0.35; cursor: not-allowed; }
+  .speed-wrap { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.82em; margin-left: auto; }
+  input[type=range] { accent-color: var(--green); }
+
+  #stepStatus { color: var(--muted); font-size: 0.85em; min-height: 1.2em; }
+
+  #stage {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 12px;
+    padding: 14px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    background: var(--panel-2);
+    min-height: 180px;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .empty-hint { color: var(--muted); font-style: italic; margin: auto; }
+  .box {
+    border: 1px solid var(--border);
+    background: #262838;
+    border-radius: 8px;
+    padding: 8px 10px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    min-width: 90px;
+  }
+  .box.container { border-color: var(--teal); }
+  .box .title { font-weight: 700; color: var(--text); font-size: 0.9em; display: block; }
+  .box .type-label {
+    font-size: 0.68em;
+    font-style: italic;
+    margin: 2px 0 6px;
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .box .children { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .item {
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.85em;
+    display: inline-block;
+  }
+  .type-int .type-label, .type-int .item { background: rgba(79,195,247,0.15); color: var(--blue); }
+  .type-float .type-label, .type-float .item { background: rgba(79,195,247,0.1); color: var(--blue); }
+  .type-str .type-label, .type-str .item { background: rgba(255,183,77,0.15); color: var(--orange); }
+  .type-bool .type-label, .type-bool .item { background: rgba(179,136,255,0.18); color: var(--purple); }
+  .type-NoneType .type-label, .type-NoneType .item { background: rgba(120,144,156,0.18); color: var(--gray); }
+  .type-list .type-label { background: rgba(77,208,201,0.18); color: var(--teal); }
+  .type-dict .type-label { background: rgba(240,98,146,0.18); color: var(--pink); }
+  .type-tuple .type-label { background: rgba(255,238,88,0.18); color: var(--yellow); }
+  .type-set .type-label { background: rgba(255,238,88,0.12); color: var(--yellow); }
+  .type-function .type-label, .type-function .item { background: rgba(239,83,80,0.15); color: var(--red); }
+  .type-other .type-label, .type-other .item { background: rgba(139,141,163,0.15); color: var(--muted); }
+
+  @keyframes pulseNew {
+    0% { box-shadow: 0 0 0 0 rgba(76,175,80,0.6); }
+    70% { box-shadow: 0 0 0 10px rgba(76,175,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); }
+  }
+  @keyframes pulseChanged {
+    0% { box-shadow: 0 0 0 0 rgba(255,183,77,0.6); }
+    70% { box-shadow: 0 0 0 10px rgba(255,183,77,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,183,77,0); }
+  }
+  .box.new-var { border-color: var(--green); animation: pulseNew 1.1s ease-out 1; }
+  .box.changed-var { border-color: var(--orange); animation: pulseChanged 1.1s ease-out 1; }
+
+  #consoleLog {
+    background: #101119;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.85em;
+    max-height: 220px;
+    overflow-y: auto;
+    line-height: 1.5;
+  }
+  .cl-code { color: #7fb2ff; white-space: pre-wrap; }
+  .cl-code::before { content: ">>> "; color: #55586e; }
+  .cl-output { color: #b7e8b0; white-space: pre-wrap; margin: 2px 0 8px 14px; }
+  .cl-error { color: var(--red); white-space: pre-wrap; margin: 2px 0 8px 14px; }
+
+  #toastContainer {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 200;
+  }
+  .toast {
+    background: #1e2b1f;
+    border: 1px solid var(--green);
+    color: #d7ffd9;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.88em;
+    white-space: pre-wrap;
+    max-width: 320px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    animation: toastIn 0.25s ease-out;
+    cursor: pointer;
+  }
+  .toast .toast-label { display: block; color: var(--green-glow); font-size: 0.75em; margin-bottom: 4px; font-style: italic; }
+  @keyframes toastIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
+
+  .overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+  }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px 24px;
+    width: 90%;
+    max-width: 380px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  }
+  .modal .modal-icon { font-size: 1.4em; margin-bottom: 6px; }
+  .modal p { margin: 0 0 12px; color: var(--text); font-family: 'Fira Code', Consolas, monospace; }
+  .modal input {
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    font-family: 'Fira Code', Consolas, monospace;
+    font-size: 0.95em;
+  }
+  .modal .modal-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
+
+  #loadingNote { color: var(--muted); font-size: 0.85em; }
+  footer { text-align: center; color: var(--muted); font-size: 0.78em; padding: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🐍 Визуализатор переменных Python</h1>
+    <p>Смотри, как устроена память программы — шаг за шагом</p>
+  </div>
+  <button id="helpBtn" title="Как пользоваться">?</button>
+</header>
+
+<div id="helpBox">
+  <b>Как это работает:</b> напиши код и нажми «Подготовить и начать». Каждая инструкция верхнего уровня — это один шаг.
+  Кнопкой «Шаг вперёд» выполняешь код по одной инструкции и смотришь, как справа появляются и меняются переменные
+  (зелёная рамка — новая переменная, оранжевая — изменилась). Если в коде есть <b>input()</b> — появится окно с вопросом
+  и полем для ответа. Если есть <b>print()</b> — результат всплывёт справа сверху и останется в консоли снизу.<br>
+  <b>Важно:</b> цикл (for/while) или блок if выполняется целиком за один шаг — это шаг по инструкциям, а не по строкам внутри цикла.
+</div>
+
+<div id="toastContainer"></div>
+
+<main>
+  <section class="panel">
+    <h2>Код</h2>
+    <textarea id="codeInput" spellcheck="false">a = 5
+b = [1, 2, 3]
+name = "Алексей"</textarea>
+    <div id="codeView"></div>
+
+    <div class="examples-row" id="examplesRow">
+      <button class="ex-btn" data-ex="vars">Пример: переменные</button>
+      <button class="ex-btn" data-ex="shop">Пример: список покупок</button>
+      <button class="ex-btn" data-ex="input">Пример: ввод данных</button>
+      <button class="ex-btn" data-ex="loop">Пример: цикл</button>
+    </div>
+
+    <div class="btn-row">
+      <button class="action" id="prepareBtn">🚀 Подготовить и начать</button>
+      <span id="loadingNote">Загружаю Python (Pyodide)…</span>
+    </div>
+
+    <div class="btn-row" id="runControls" style="display:none;">
+      <button class="action secondary" id="prevBtn">⏮ Шаг назад</button>
+      <button class="action" id="nextBtn">⏭ Шаг вперёд</button>
+      <button class="action" id="runAllBtn">⏩ Выполнить всё</button>
+      <button class="action secondary" id="stopBtn" style="display:none;">⏹ Стоп</button>
+      <button class="action danger" id="editBtn">✏️ Изменить код</button>
+      <div class="speed-wrap">
+        <span>Скорость</span>
+        <input type="range" id="speedRange" min="200" max="2000" step="100" value="800">
+      </div>
+    </div>
+    <div id="stepStatus"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Память программы</h2>
+    <div id="stage"><div class="empty-hint">Переменных пока нет</div></div>
+    <h2 style="margin-top:6px;">Консоль (print)</h2>
+    <div id="consoleLog"></div>
+  </section>
+</main>
+
+<footer>Работает на Pyodide (Python в браузере). Ничего не отправляется на сервер.</footer>
+
+<div class="overlay" id="inputOverlay">
+  <div class="modal">
+    <div class="modal-icon">⌨️</div>
+    <p id="inputPromptText">Введите значение:</p>
+    <input type="text" id="inputField" autocomplete="off">
+    <div class="modal-actions">
+      <button class="action" id="inputSubmitBtn">Отправить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let pyodide = null;
+let ns = null;                 // persistent Python namespace (PyProxy dict) for the user program
+let segments = [];             // [{start, end, code}]
+let stepInputs = [];           // stored input() answers per step, so replay doesn't re-prompt
+let consoleLog = [];           // [{type: 'code'|'output'|'error', text}]
+let lastVarsSnapshot = {};
+let currentStep = 0;           // index of the NEXT step to execute
+let autoplayStop = false;
+let running = false;           // true once "prepare" has been pressed
+
+const examples = {
+  vars: `age = 25\nname = "Алексей"\nheight = 1.85\nis_student = True`,
+  shop: `products = ["хлеб", "молоко", "яйца"]\nprices = {"хлеб": 50, "молоко": 80, "яйца": 120}\ntotal = sum(prices.values())\nprint("Итого:", total)`,
+  input: `name = input("Как тебя зовут?")\nage = int(input("Сколько тебе лет?"))\nprint("Привет,", name, "! Тебе", age, "лет")`,
+  loop: `total = 0\nfor i in range(1, 6):\n    total += i\n    print("Шаг", i, "сумма:", total)`
+};
+
+// ---------- Pyodide setup ----------
+async function initPyodide() {
+  pyodide = await loadPyodide();
+  pyodide.runPython(`
+import ast, json
+
+def _parse_segments(src):
+    tree = ast.parse(src)
+    segs = []
+    for node in tree.body:
+        segs.append({
+            "start": node.lineno,
+            "end": getattr(node, "end_lineno", node.lineno),
+            "code": ast.get_source_segment(src, node)
+        })
+    return json.dumps(segs)
+`);
+  document.getElementById('loadingNote').textContent = 'Готово!';
+  document.getElementById('prepareBtn').disabled = false;
+  setTimeout(() => { document.getElementById('loadingNote').textContent = ''; }, 1500);
+}
+document.getElementById('prepareBtn').disabled = true;
+initPyodide();
+
+function freshNamespace() {
+  const newNs = pyodide.toPy({});
+  pyodide.runPython(`
+import io, contextlib, json
+
+_input_value_queue = []
+
+def input(prompt=""):
+    global _input_value_queue
+    if _input_value_queue:
+        return _input_value_queue.pop(0)
+    return ""
+
+def _run_capture(_code):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(_code, globals())
+    return buf.getvalue()
+
+def _type_name(o):
+    return type(o).__name__
+
+def _ser(o, depth=0):
+    if depth > 6:
+        return {"type": _type_name(o), "value": "…"}
+    if isinstance(o, dict):
+        return {"type": "dict", "value": {str(k): _ser(v, depth+1) for k, v in o.items()}}
+    if isinstance(o, (list, tuple, set)):
+        return {"type": _type_name(o), "value": {str(i): _ser(v, depth+1) for i, v in enumerate(o)}}
+    if o is None:
+        return {"type": "NoneType", "value": "None"}
+    if isinstance(o, bool):
+        return {"type": "bool", "value": str(o)}
+    if isinstance(o, str):
+        return {"type": "str", "value": o}
+    if callable(o):
+        return {"type": "function", "value": getattr(o, "__name__", "function")}
+    return {"type": _type_name(o), "value": str(o)}
+
+def _serialize_all():
+    data = {}
+    for k, v in list(globals().items()):
+        if k in _internal_names or k.startswith("__"):
+            continue
+        data[k] = _ser(v)
+    return json.dumps(data)
+
+_internal_names = set(globals().keys()) | {"_internal_names"}
+`, { globals: newNs });
+  return newNs;
+}
+
+// ---------- helpers ----------
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function extractBalancedParens(str, openIdx) {
+  let depth = 0, inStr = null;
+  for (let i = openIdx; i < str.length; i++) {
+    const c = str[i];
+    if (inStr) {
+      if (c === '\\') { i++; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'") { inStr = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return str.slice(openIdx + 1, i); }
+  }
+  return str.slice(openIdx + 1);
+}
+
+function findInputPrompts(code) {
+  const prompts = [];
+  const re = /\binput\s*\(/g;
+  let m;
+  while ((m = re.exec(code))) {
+    const openParenIdx = code.indexOf('(', m.index);
+    prompts.push(extractBalancedParens(code, openParenIdx).trim());
+  }
+  return prompts;
+}
+
+function evalPromptText(argExpr) {
+  if (!argExpr) return 'Введите значение:';
+  try {
+    ns.set('_prompt_expr_src', argExpr);
+    const val = pyodide.runPython('eval(_prompt_expr_src, globals())', { globals: ns });
+    return String(val);
+  } catch (e) {
+    return argExpr;
+  }
+}
+
+function cleanPyError(msg) {
+  const lines = msg.trim().split('\n').filter(Boolean);
+  return lines[lines.length - 1] || msg;
+}
+
+function showInputModal(promptText) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('inputOverlay');
+    const label = document.getElementById('inputPromptText');
+    const field = document.getElementById('inputField');
+    const submitBtn = document.getElementById('inputSubmitBtn');
+    label.textContent = promptText;
+    field.value = '';
+    overlay.style.display = 'flex';
+    setTimeout(() => field.focus(), 30);
+    function onKey(e) { if (e.key === 'Enter') submit(); }
+    function submit() {
+      overlay.style.display = 'none';
+      field.removeEventListener('keydown', onKey);
+      submitBtn.removeEventListener('click', submit);
+      resolve(field.value);
+    }
+    field.addEventListener('keydown', onKey);
+    submitBtn.addEventListener('click', submit);
+  });
+}
+
+function showToast(text) {
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `<span class="toast-label">print()</span>${escapeHtml(text)}`;
+  el.onclick = () => el.remove();
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ---------- rendering ----------
+function renderCodeView(code) {
+  const lines = code.split('\n');
+  const view = document.getElementById('codeView');
+  view.innerHTML = lines.map((l, idx) =>
+    `<div class="code-line" data-line="${idx + 1}"><span class="ln">${idx + 1}</span><span class="lc">${escapeHtml(l) || ' '}</span></div>`
+  ).join('');
+  view.style.display = 'block';
+}
+
+function highlightLines(start, end) {
+  document.querySelectorAll('#codeView .code-line').forEach(el => {
+    const n = parseInt(el.dataset.line, 10);
+    el.classList.toggle('active-line', n >= start && n <= end);
+  });
+}
+
+function clearHighlight() {
+  document.querySelectorAll('#codeView .code-line').forEach(el => el.classList.remove('active-line'));
+}
+
+function formatValue(type, value) {
+  if (type === 'str') return '"' + value + '"';
+  return String(value);
+}
+
+function typeClass(type) {
+  const known = ['int','float','str','bool','NoneType','list','dict','tuple','set','function'];
+  return known.includes(type) ? 'type-' + type : 'type-other';
+}
+
+function createBox(key, dataObj, status) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'box ' + typeClass(dataObj.type);
+  if (status === 'new') wrapper.classList.add('new-var');
+  if (status === 'changed') wrapper.classList.add('changed-var');
+
+  const title = document.createElement('span');
+  title.className = 'title';
+  title.textContent = key;
+  wrapper.appendChild(title);
+
+  const typeLabel = document.createElement('span');
+  typeLabel.className = 'type-label';
+  typeLabel.textContent = dataObj.type;
+  wrapper.appendChild(typeLabel);
+
+  if (['list', 'dict', 'tuple', 'set'].includes(dataObj.type)) {
+    wrapper.classList.add('container');
+    const children = document.createElement('div');
+    children.className = 'children';
+    for (const k in dataObj.value) {
+      children.appendChild(createBox(k, dataObj.value[k], 'same'));
+    }
+    if (Object.keys(dataObj.value).length === 0) {
+      const empty = document.createElement('span');
+      empty.style.color = 'var(--muted)';
+      empty.style.fontSize = '0.8em';
+      empty.textContent = 'пусто';
+      children.appendChild(empty);
+    }
+    wrapper.appendChild(children);
+  } else {
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.textContent = formatValue(dataObj.type, dataObj.value);
+    wrapper.appendChild(item);
+  }
+  return wrapper;
+}
+
+function renderStage(vars, prevVars) {
+  const stage = document.getElementById('stage');
+  stage.innerHTML = '';
+  const keys = Object.keys(vars);
+  if (keys.length === 0) {
+    stage.innerHTML = '<div class="empty-hint">Переменных пока нет</div>';
+    return;
+  }
+  for (const key of keys) {
+    const dataObj = vars[key];
+    const prevStr = prevVars && (key in prevVars) ? JSON.stringify(prevVars[key]) : undefined;
+    const curStr = JSON.stringify(dataObj);
+    let status = 'same';
+    if (prevStr === undefined) status = 'new';
+    else if (prevStr !== curStr) status = 'changed';
+    stage.appendChild(createBox(key, dataObj, status));
+  }
+}
+
+function renderConsole() {
+  const el = document.getElementById('consoleLog');
+  el.innerHTML = consoleLog.map(entry => {
+    if (entry.type === 'code') return `<div class="cl-code">${escapeHtml(entry.text)}</div>`;
+    if (entry.type === 'error') return `<div class="cl-error">${escapeHtml(entry.text)}</div>`;
+    return `<div class="cl-output">${escapeHtml(entry.text)}</div>`;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(text) {
+  document.getElementById('stepStatus').textContent = text;
+}
+
+function updateControlsState() {
+  document.getElementById('prevBtn').disabled = currentStep <= 0;
+  const finished = currentStep >= segments.length;
+  document.getElementById('nextBtn').disabled = finished;
+  document.getElementById('runAllBtn').disabled = finished;
+  setStatus(finished
+    ? `Программа завершена (${segments.length} шаг(ов) выполнено).`
+    : `Шаг ${currentStep + 1} из ${segments.length} — следующая инструкция готова к выполнению.`);
+}
+
+// ---------- execution ----------
+async function ensureInputsForStep(i) {
+  if (stepInputs[i]) return;
+  const code = segments[i].code;
+  const prompts = findInputPrompts(code);
+  if (prompts.length === 0) { stepInputs[i] = []; return; }
+  const answers = [];
+  for (const p of prompts) {
+    const promptText = evalPromptText(p);
+    const answer = await showInputModal(promptText);
+    answers.push(answer);
+  }
+  stepInputs[i] = answers;
+}
+
+async function execStep(i) {
+  await ensureInputsForStep(i);
+  ns.set('_input_value_queue', pyodide.toPy(stepInputs[i].slice()));
+  ns.set('_current_code', segments[i].code);
+  let output = '', error = null, vars = null;
+  try {
+    output = pyodide.runPython('_run_capture(_current_code)', { globals: ns });
+    const varsJson = pyodide.runPython('_serialize_all()', { globals: ns });
+    vars = JSON.parse(varsJson);
+  } catch (err) {
+    error = cleanPyError(err.message || String(err));
+  }
+  return { output, error, vars };
+}
+
+async function nextStep() {
+  if (currentStep >= segments.length) return;
+  document.getElementById('nextBtn').disabled = true;
+  document.getElementById('runAllBtn').disabled = true;
+  const i = currentStep;
+  highlightLines(segments[i].start, segments[i].end);
+  const res = await execStep(i);
+  consoleLog.push({ type: 'code', text: segments[i].code });
+  if (res.error) {
+    consoleLog.push({ type: 'error', text: res.error });
+    renderConsole();
+    setStatus('Ошибка на шаге ' + (i + 1) + ': ' + res.error);
+  } else {
+    if (res.output) { consoleLog.push({ type: 'output', text: res.output }); showToast(res.output); }
+    renderConsole();
+    renderStage(res.vars, lastVarsSnapshot);
+    lastVarsSnapshot = res.vars;
+    currentStep = i + 1;
+  }
+  updateControlsState();
+}
+
+async function prevStep() {
+  if (currentStep <= 0) return;
+  const target = currentStep - 1;
+  ns = freshNamespace();
+  consoleLog = [];
+  lastVarsSnapshot = {};
+  for (let i = 0; i < target; i++) {
+    const res = await execStep(i);
+    consoleLog.push({ type: 'code', text: segments[i].code });
+    if (res.error) { consoleLog.push({ type: 'error', text: res.error }); break; }
+    if (res.output) consoleLog.push({ type: 'output', text: res.output });
+    lastVarsSnapshot = res.vars;
+  }
+  currentStep = target;
+  renderConsole();
+  renderStage(lastVarsSnapshot, {});
+  if (target > 0) highlightLines(segments[target - 1].start, segments[target - 1].end);
+  else clearHighlight();
+  updateControlsState();
+}
+
+async function runAll() {
+  autoplayStop = false;
+  document.getElementById('runAllBtn').style.display = 'none';
+  document.getElementById('stopBtn').style.display = 'inline-block';
+  document.getElementById('prevBtn').disabled = true;
+  const speedEl = document.getElementById('speedRange');
+  while (currentStep < segments.length && !autoplayStop) {
+    await nextStep();
+    if (autoplayStop) break;
+    await new Promise(r => setTimeout(r, parseInt(speedEl.value, 10)));
+  }
+  document.getElementById('runAllBtn').style.display = 'inline-block';
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('prevBtn').disabled = currentStep <= 0;
+}
+
+// ---------- mode switching ----------
+function enterEditMode() {
+  running = false;
+  document.getElementById('codeInput').style.display = 'block';
+  document.getElementById('codeInput').disabled = false;
+  document.getElementById('codeView').style.display = 'none';
+  document.getElementById('runControls').style.display = 'none';
+  document.getElementById('prepareBtn').style.display = 'inline-block';
+  document.getElementById('examplesRow').style.display = 'flex';
+  document.getElementById('stage').innerHTML = '<div class="empty-hint">Переменных пока нет</div>';
+  document.getElementById('consoleLog').innerHTML = '';
+  setStatus('');
+  segments = []; stepInputs = []; consoleLog = []; lastVarsSnapshot = {}; currentStep = 0;
+}
+
+async function prepareAndStart() {
+  const code = document.getElementById('codeInput').value;
+  let segsJson;
+  try {
+    pyodide.globals.set('_src_to_parse', code);
+    segsJson = pyodide.runPython('_parse_segments(_src_to_parse)');
+  } catch (err) {
+    alert('Ошибка синтаксиса в коде:\n' + cleanPyError(err.message || String(err)));
+    return;
+  }
+  segments = JSON.parse(segsJson);
+  if (segments.length === 0) {
+    alert('Код пустой — нечего выполнять.');
+    return;
+  }
+  stepInputs = [];
+  consoleLog = [];
+  lastVarsSnapshot = {};
+  currentStep = 0;
+  ns = freshNamespace();
+
+  running = true;
+  document.getElementById('codeInput').style.display = 'none';
+  document.getElementById('examplesRow').style.display = 'none';
+  document.getElementById('prepareBtn').style.display = 'none';
+  document.getElementById('runControls').style.display = 'flex';
+  document.getElementById('runAllBtn').style.display = 'inline-block';
+  document.getElementById('stopBtn').style.display = 'none';
+  renderCodeView(code);
+  renderStage({}, {});
+  document.getElementById('consoleLog').innerHTML = '';
+  updateControlsState();
+}
+
+// ---------- wiring ----------
+document.getElementById('helpBtn').onclick = () => {
+  const box = document.getElementById('helpBox');
+  box.style.display = box.style.display === 'block' ? 'none' : 'block';
+};
+document.getElementById('prepareBtn').onclick = prepareAndStart;
+document.getElementById('editBtn').onclick = enterEditMode;
+document.getElementById('nextBtn').onclick = nextStep;
+document.getElementById('prevBtn').onclick = prevStep;
+document.getElementById('runAllBtn').onclick = runAll;
+document.getElementById('stopBtn').onclick = () => { autoplayStop = true; };
+document.querySelectorAll('.ex-btn').forEach(btn => {
+  btn.onclick = () => { document.getElementById('codeInput').value = examples[btn.dataset.ex]; };
+});
+</script>
+</body>
+</html>
