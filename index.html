@@ -232,6 +232,8 @@
   .cl-code::before { content: ">>> "; color: #55586e; }
   .cl-output { color: #b7e8b0; white-space: pre-wrap; margin: 2px 0 8px 14px; }
   .cl-error { color: var(--red); white-space: pre-wrap; margin: 2px 0 8px 14px; }
+  .cl-control { color: var(--muted); font-style: italic; white-space: pre-wrap; }
+  .cl-control::before { content: "↻ "; color: #55586e; }
 
   #toastContainer {
     position: fixed;
@@ -300,17 +302,19 @@
 <header>
   <div>
     <h1>🐍 Визуализатор переменных Python</h1>
-    <p>Смотри, как устроена память программы — шаг за шагом</p>
+    <p>Смотри, как устроена память программы — шаг за шагом, включая каждую итерацию цикла</p>
   </div>
   <button id="helpBtn" title="Как пользоваться">?</button>
 </header>
 
 <div id="helpBox">
-  <b>Как это работает:</b> напиши код и нажми «Подготовить и начать». Каждая инструкция верхнего уровня — это один шаг.
-  Кнопкой «Шаг вперёд» выполняешь код по одной инструкции и смотришь, как справа появляются и меняются переменные
-  (зелёная рамка — новая переменная, оранжевая — изменилась). Если в коде есть <b>input()</b> — появится окно с вопросом
-  и полем для ответа. Если есть <b>print()</b> — результат всплывёт справа сверху и останется в консоли снизу.<br>
-  <b>Важно:</b> цикл (for/while) или блок if выполняется целиком за один шаг — это шаг по инструкциям, а не по строкам внутри цикла.
+  <b>Как это работает:</b> напиши код и нажми «Подготовить и начать». Теперь каждый шаг — это одна инструкция,
+  <b>одна итерация цикла</b> или <b>одна проверка условия</b>: <code>for</code>/<code>while</code> выполняются
+  не целиком, а по кругу — на каждом шаге видно, как меняется переменная цикла и что происходит внутри тела.
+  Кнопкой «Шаг вперёд» продвигаешься на один такой шаг. Если в коде есть <b>input()</b> — появится окно
+  с вопросом и полем для ответа. Если есть <b>print()</b> — результат всплывёт справа сверху и останется в консоли снизу.<br>
+  <b>Ограничение:</b> тело пользовательской функции (def) при вызове выполняется целиком за один шаг — заглядывать
+  внутрь вызовов функций визуализатор пока не умеет, только в верхнеуровневый код, if/for/while.
 </div>
 
 <div id="toastContainer"></div>
@@ -327,7 +331,9 @@ name = "Алексей"</textarea>
       <button class="ex-btn" data-ex="vars">Пример: переменные</button>
       <button class="ex-btn" data-ex="shop">Пример: список покупок</button>
       <button class="ex-btn" data-ex="input">Пример: ввод данных</button>
-      <button class="ex-btn" data-ex="loop">Пример: цикл</button>
+      <button class="ex-btn" data-ex="loop">Пример: цикл for</button>
+      <button class="ex-btn" data-ex="while">Пример: цикл while</button>
+      <button class="ex-btn" data-ex="nested">Пример: цикл + if</button>
     </div>
 
     <div class="btn-row">
@@ -343,7 +349,7 @@ name = "Алексей"</textarea>
       <button class="action danger" id="editBtn">✏️ Изменить код</button>
       <div class="speed-wrap">
         <span>Скорость</span>
-        <input type="range" id="speedRange" min="200" max="2000" step="100" value="800">
+        <input type="range" id="speedRange" min="150" max="1800" step="50" value="600">
       </div>
     </div>
     <div id="stepStatus"></div>
@@ -352,7 +358,7 @@ name = "Алексей"</textarea>
   <section class="panel">
     <h2>Память программы</h2>
     <div id="stage"><div class="empty-hint">Переменных пока нет</div></div>
-    <h2 style="margin-top:6px;">Консоль (print)</h2>
+    <h2 style="margin-top:6px;">Консоль (print / ход выполнения)</h2>
     <div id="consoleLog"></div>
   </section>
 </main>
@@ -373,49 +379,50 @@ name = "Алексей"</textarea>
 <script>
 let pyodide = null;
 let ns = null;                 // persistent Python namespace (PyProxy dict) for the user program
-let segments = [];             // [{start, end, code}]
-let stepInputs = [];           // stored input() answers per step, so replay doesn't re-prompt
-let consoleLog = [];           // [{type: 'code'|'output'|'error', text}]
+let currentCode = '';          // last prepared source
+let stepInputs = [];           // stored input() answers per user-visible step, so replay doesn't re-prompt
+let consoleLog = [];           // [{type: 'code'|'output'|'error'|'control', text}]
 let lastVarsSnapshot = {};
-let currentStep = 0;           // index of the NEXT step to execute
+let currentStep = 0;           // number of user-visible steps executed so far
+let programDone = false;
 let autoplayStop = false;
-let running = false;           // true once "prepare" has been pressed
+
+const KIND_LABELS = {
+  stmt: 'инструкция',
+  if: 'проверка условия if',
+  for_header: 'начало цикла for',
+  for_iter: 'новая итерация цикла',
+  while_check: 'проверка условия while',
+  'break': 'выход из цикла (break)',
+  'continue': 'переход к следующей итерации (continue)'
+};
 
 const examples = {
   vars: `age = 25\nname = "Алексей"\nheight = 1.85\nis_student = True`,
   shop: `products = ["хлеб", "молоко", "яйца"]\nprices = {"хлеб": 50, "молоко": 80, "яйца": 120}\ntotal = sum(prices.values())\nprint("Итого:", total)`,
   input: `name = input("Как тебя зовут?")\nage = int(input("Сколько тебе лет?"))\nprint("Привет,", name, "! Тебе", age, "лет")`,
-  loop: `total = 0\nfor i in range(1, 6):\n    total += i\n    print("Шаг", i, "сумма:", total)`
+  loop: `total = 0\nfor i in range(1, 6):\n    total += i\n    print("Шаг", i, "сумма:", total)`,
+  while: `count = 0\nwhile count < 3:\n    print("count =", count)\n    count += 1\nprint("Готово")`,
+  nested: `total = 0\nfor i in range(1, 5):\n    total += i\n    if total > 3:\n        print("Превысили 3:", total)\nprint("Итого:", total)`
 };
 
 // ---------- Pyodide setup ----------
+document.getElementById('prepareBtn').disabled = true;
 async function initPyodide() {
   pyodide = await loadPyodide();
-  pyodide.runPython(`
-import ast, json
-
-def _parse_segments(src):
-    tree = ast.parse(src)
-    segs = []
-    for node in tree.body:
-        segs.append({
-            "start": node.lineno,
-            "end": getattr(node, "end_lineno", node.lineno),
-            "code": ast.get_source_segment(src, node)
-        })
-    return json.dumps(segs)
-`);
   document.getElementById('loadingNote').textContent = 'Готово!';
   document.getElementById('prepareBtn').disabled = false;
   setTimeout(() => { document.getElementById('loadingNote').textContent = ''; }, 1500);
 }
-document.getElementById('prepareBtn').disabled = true;
 initPyodide();
 
+// Sets up a fresh interpreter namespace: helper functions + the step-by-step
+// generator-based mini interpreter that walks the AST and yields one event
+// per statement / loop iteration / condition check.
 function freshNamespace() {
   const newNs = pyodide.toPy({});
   pyodide.runPython(`
-import io, contextlib, json
+import ast, io, contextlib, json
 
 _input_value_queue = []
 
@@ -425,11 +432,142 @@ def input(prompt=""):
         return _input_value_queue.pop(0)
     return ""
 
-def _run_capture(_code):
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        exec(_code, globals())
-    return buf.getvalue()
+class _BreakSignal(Exception): pass
+class _ContinueSignal(Exception): pass
+
+_prog_src = ""
+_prog_gen = None
+
+def _seg(node):
+    try:
+        return ast.get_source_segment(_prog_src, node) or ""
+    except Exception:
+        return ""
+
+def _exec_node_atomic(node):
+    mod = ast.Module(body=[node], type_ignores=[])
+    ast.fix_missing_locations(mod)
+    code_obj = compile(mod, "<step>", "exec")
+    exec(code_obj, globals())
+
+def _eval_node_atomic(expr_node):
+    mod = ast.Expression(body=expr_node)
+    ast.fix_missing_locations(mod)
+    code_obj = compile(mod, "<expr>", "eval")
+    return eval(code_obj, globals())
+
+def _assign_for_target(target_node, item):
+    globals()["_for_item_tmp"] = item
+    assign_node = ast.Assign(
+        targets=[target_node],
+        value=ast.Name(id="_for_item_tmp", ctx=ast.Load())
+    )
+    ast.copy_location(assign_node, target_node)
+    for child in ast.walk(assign_node):
+        ast.copy_location(child, target_node)
+    ast.fix_missing_locations(assign_node)
+    exec(compile(ast.Module(body=[assign_node], type_ignores=[]), "<forassign>", "exec"), globals())
+    del globals()["_for_item_tmp"]
+
+def _run_body(nodes):
+    for node in nodes:
+        yield from _run_node(node)
+
+def _run_node(node):
+    if isinstance(node, ast.If):
+        cond_src = "if " + _seg(node.test) + ":"
+        end_ln = getattr(node.test, "end_lineno", node.lineno)
+        yield {"phase": "before", "line_start": node.lineno, "line_end": end_ln, "code": cond_src, "kind": "if"}
+        result = bool(_eval_node_atomic(node.test))
+        yield {"phase": "after", "line_start": node.lineno, "line_end": end_ln,
+               "code": cond_src + ("  # True -> выполняем блок" if result else "  # False -> пропускаем блок"),
+               "output": "", "kind": "if"}
+        yield from _run_body(node.body if result else node.orelse)
+
+    elif isinstance(node, ast.For):
+        target_src = _seg(node.target)
+        iter_src = _seg(node.iter)
+        header = "for " + target_src + " in " + iter_src + ":"
+        end_ln = getattr(node.iter, "end_lineno", node.lineno)
+        yield {"phase": "before", "line_start": node.lineno, "line_end": end_ln, "code": header, "kind": "for_header"}
+        iterable = _eval_node_atomic(node.iter)
+        yield {"phase": "after", "line_start": node.lineno, "line_end": end_ln, "code": header, "output": "", "kind": "for_header"}
+        broke = False
+        for item in iterable:
+            try:
+                item_repr = repr(item)
+            except Exception:
+                item_repr = str(item)
+            assign_code = target_src + " = " + item_repr
+            yield {"phase": "before", "line_start": node.lineno, "line_end": node.lineno, "code": assign_code, "kind": "for_iter"}
+            _assign_for_target(node.target, item)
+            yield {"phase": "after", "line_start": node.lineno, "line_end": node.lineno, "code": assign_code, "output": "", "kind": "for_iter"}
+            try:
+                yield from _run_body(node.body)
+            except _BreakSignal:
+                broke = True
+                break
+            except _ContinueSignal:
+                continue
+        if not broke:
+            yield from _run_body(node.orelse)
+
+    elif isinstance(node, ast.While):
+        test_src = _seg(node.test)
+        header = "while " + test_src + ":"
+        end_ln = getattr(node.test, "end_lineno", node.lineno)
+        broke = False
+        while True:
+            yield {"phase": "before", "line_start": node.lineno, "line_end": end_ln, "code": header, "kind": "while_check"}
+            result = bool(_eval_node_atomic(node.test))
+            yield {"phase": "after", "line_start": node.lineno, "line_end": end_ln,
+                   "code": header + ("  # True -> выполняем тело" if result else "  # False -> выходим из цикла"),
+                   "output": "", "kind": "while_check"}
+            if not result:
+                break
+            try:
+                yield from _run_body(node.body)
+            except _BreakSignal:
+                broke = True
+                break
+            except _ContinueSignal:
+                continue
+        if not broke:
+            yield from _run_body(node.orelse)
+
+    elif isinstance(node, ast.Break):
+        yield {"phase": "before", "line_start": node.lineno, "line_end": node.lineno, "code": "break", "kind": "break"}
+        yield {"phase": "after", "line_start": node.lineno, "line_end": node.lineno, "code": "break", "output": "", "kind": "break"}
+        raise _BreakSignal()
+
+    elif isinstance(node, ast.Continue):
+        yield {"phase": "before", "line_start": node.lineno, "line_end": node.lineno, "code": "continue", "kind": "continue"}
+        yield {"phase": "after", "line_start": node.lineno, "line_end": node.lineno, "code": "continue", "output": "", "kind": "continue"}
+        raise _ContinueSignal()
+
+    else:
+        code_text = _seg(node)
+        end_ln = getattr(node, "end_lineno", node.lineno)
+        yield {"phase": "before", "line_start": node.lineno, "line_end": end_ln, "code": code_text, "kind": "stmt"}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _exec_node_atomic(node)
+        yield {"phase": "after", "line_start": node.lineno, "line_end": end_ln, "code": code_text, "output": buf.getvalue(), "kind": "stmt"}
+
+def _start_program(src):
+    global _prog_src, _prog_gen
+    _prog_src = src
+    tree = ast.parse(src)
+    _prog_gen = _run_body(tree.body)
+
+def _advance():
+    global _prog_gen
+    try:
+        ev = next(_prog_gen)
+        ev["done"] = False
+        return json.dumps(ev)
+    except StopIteration:
+        return json.dumps({"done": True})
 
 def _type_name(o):
     return type(o).__name__
@@ -464,7 +602,7 @@ _internal_names = set(globals().keys()) | {"_internal_names"}
   return newNs;
 }
 
-// ---------- helpers ----------
+// ---------- small helpers ----------
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -639,6 +777,7 @@ function renderConsole() {
   el.innerHTML = consoleLog.map(entry => {
     if (entry.type === 'code') return `<div class="cl-code">${escapeHtml(entry.text)}</div>`;
     if (entry.type === 'error') return `<div class="cl-error">${escapeHtml(entry.text)}</div>`;
+    if (entry.type === 'control') return `<div class="cl-control">${escapeHtml(entry.text)}</div>`;
     return `<div class="cl-output">${escapeHtml(entry.text)}</div>`;
   }).join('');
   el.scrollTop = el.scrollHeight;
@@ -650,63 +789,108 @@ function setStatus(text) {
 
 function updateControlsState() {
   document.getElementById('prevBtn').disabled = currentStep <= 0;
-  const finished = currentStep >= segments.length;
-  document.getElementById('nextBtn').disabled = finished;
-  document.getElementById('runAllBtn').disabled = finished;
-  setStatus(finished
-    ? `Программа завершена (${segments.length} шаг(ов) выполнено).`
-    : `Шаг ${currentStep + 1} из ${segments.length} — следующая инструкция готова к выполнению.`);
+  document.getElementById('nextBtn').disabled = programDone;
+  document.getElementById('runAllBtn').disabled = programDone;
+  setStatus(programDone
+    ? `Программа завершена (${currentStep} шаг(ов) выполнено).`
+    : `Выполнено шагов: ${currentStep}. Готово к следующему шагу.`);
 }
 
-// ---------- execution ----------
-async function ensureInputsForStep(i) {
-  if (stepInputs[i]) return;
-  const code = segments[i].code;
-  const prompts = findInputPrompts(code);
-  if (prompts.length === 0) { stepInputs[i] = []; return; }
+// ---------- execution engine ----------
+function pyAdvance() {
+  const json = pyodide.runPython('_advance()', { globals: ns });
+  return JSON.parse(json);
+}
+
+async function ensureInputsForStep(stepIndex, codeText) {
+  if (stepInputs[stepIndex]) return stepInputs[stepIndex];
+  const prompts = findInputPrompts(codeText);
   const answers = [];
   for (const p of prompts) {
     const promptText = evalPromptText(p);
     const answer = await showInputModal(promptText);
     answers.push(answer);
   }
-  stepInputs[i] = answers;
+  stepInputs[stepIndex] = answers;
+  return answers;
 }
 
-async function execStep(i) {
-  await ensureInputsForStep(i);
-  ns.set('_input_value_queue', pyodide.toPy(stepInputs[i].slice()));
-  ns.set('_current_code', segments[i].code);
-  let output = '', error = null, vars = null;
+// Performs exactly one user-visible step (one statement / one loop iteration /
+// one condition check). Returns {done: true} once the program is finished,
+// or {done:false, kind, code, output, error} describing what happened.
+async function performStep(stepIndex, options = {}) {
+  const silent = !!options.silent;
+  let before;
   try {
-    output = pyodide.runPython('_run_capture(_current_code)', { globals: ns });
+    before = pyAdvance();
+  } catch (err) {
+    return { done: false, error: cleanPyError(err.message || String(err)) };
+  }
+  if (before.done) return { done: true };
+
+  const answers = await ensureInputsForStep(stepIndex, before.code);
+  ns.set('_input_value_queue', pyodide.toPy(answers.slice()));
+
+  let after;
+  try {
+    after = pyAdvance();
+  } catch (err) {
+    return { done: false, error: cleanPyError(err.message || String(err)), kind: before.kind, code: before.code };
+  }
+
+  let vars = null;
+  try {
     const varsJson = pyodide.runPython('_serialize_all()', { globals: ns });
     vars = JSON.parse(varsJson);
   } catch (err) {
-    error = cleanPyError(err.message || String(err));
+    vars = lastVarsSnapshot;
   }
-  return { output, error, vars };
+
+  return {
+    done: false,
+    kind: after.kind,
+    code: after.code,
+    output: after.output || '',
+    line_start: after.line_start,
+    line_end: after.line_end,
+    vars,
+    silent
+  };
 }
 
 async function nextStep() {
-  if (currentStep >= segments.length) return;
+  if (programDone) return;
   document.getElementById('nextBtn').disabled = true;
   document.getElementById('runAllBtn').disabled = true;
-  const i = currentStep;
-  highlightLines(segments[i].start, segments[i].end);
-  const res = await execStep(i);
-  consoleLog.push({ type: 'code', text: segments[i].code });
+  const stepIndex = currentStep;
+  const res = await performStep(stepIndex);
+
+  if (res.done) {
+    programDone = true;
+    updateControlsState();
+    return;
+  }
   if (res.error) {
     consoleLog.push({ type: 'error', text: res.error });
     renderConsole();
-    setStatus('Ошибка на шаге ' + (i + 1) + ': ' + res.error);
-  } else {
-    if (res.output) { consoleLog.push({ type: 'output', text: res.output }); showToast(res.output); }
-    renderConsole();
-    renderStage(res.vars, lastVarsSnapshot);
-    lastVarsSnapshot = res.vars;
-    currentStep = i + 1;
+    setStatus('Ошибка на шаге ' + (stepIndex + 1) + ': ' + res.error);
+    programDone = true;
+    updateControlsState();
+    return;
   }
+
+  highlightLines(res.line_start, res.line_end);
+  if (res.kind === 'stmt') {
+    consoleLog.push({ type: 'code', text: res.code });
+    if (res.output) { consoleLog.push({ type: 'output', text: res.output }); showToast(res.output); }
+  } else {
+    consoleLog.push({ type: 'control', text: `[${KIND_LABELS[res.kind] || res.kind}] ${res.code}` });
+    if (res.output) { consoleLog.push({ type: 'output', text: res.output }); showToast(res.output); }
+  }
+  renderConsole();
+  renderStage(res.vars, lastVarsSnapshot);
+  lastVarsSnapshot = res.vars;
+  currentStep = stepIndex + 1;
   updateControlsState();
 }
 
@@ -714,21 +898,37 @@ async function prevStep() {
   if (currentStep <= 0) return;
   const target = currentStep - 1;
   ns = freshNamespace();
+  ns.set('_src_for_start', currentCode);
+  pyodide.runPython('_start_program(_src_for_start)', { globals: ns });
   consoleLog = [];
   lastVarsSnapshot = {};
+  programDone = false;
+
   for (let i = 0; i < target; i++) {
-    const res = await execStep(i);
-    consoleLog.push({ type: 'code', text: segments[i].code });
-    if (res.error) { consoleLog.push({ type: 'error', text: res.error }); break; }
-    if (res.output) consoleLog.push({ type: 'output', text: res.output });
+    const res = await performStep(i, { silent: true });
+    if (res.done) { programDone = true; break; }
+    if (res.error) {
+      consoleLog.push({ type: 'error', text: res.error });
+      break;
+    }
+    if (res.kind === 'stmt') {
+      consoleLog.push({ type: 'code', text: res.code });
+      if (res.output) consoleLog.push({ type: 'output', text: res.output });
+    } else {
+      consoleLog.push({ type: 'control', text: `[${KIND_LABELS[res.kind] || res.kind}] ${res.code}` });
+      if (res.output) consoleLog.push({ type: 'output', text: res.output });
+    }
     lastVarsSnapshot = res.vars;
   }
   currentStep = target;
   renderConsole();
   renderStage(lastVarsSnapshot, {});
-  if (target > 0) highlightLines(segments[target - 1].start, segments[target - 1].end);
-  else clearHighlight();
-  updateControlsState();
+  if (target > 0) {
+    updateControlsState();
+  } else {
+    clearHighlight();
+    updateControlsState();
+  }
 }
 
 async function runAll() {
@@ -737,9 +937,9 @@ async function runAll() {
   document.getElementById('stopBtn').style.display = 'inline-block';
   document.getElementById('prevBtn').disabled = true;
   const speedEl = document.getElementById('speedRange');
-  while (currentStep < segments.length && !autoplayStop) {
+  while (!programDone && !autoplayStop) {
     await nextStep();
-    if (autoplayStop) break;
+    if (autoplayStop || programDone) break;
     await new Promise(r => setTimeout(r, parseInt(speedEl.value, 10)));
   }
   document.getElementById('runAllBtn').style.display = 'inline-block';
@@ -749,7 +949,6 @@ async function runAll() {
 
 // ---------- mode switching ----------
 function enterEditMode() {
-  running = false;
   document.getElementById('codeInput').style.display = 'block';
   document.getElementById('codeInput').disabled = false;
   document.getElementById('codeView').style.display = 'none';
@@ -759,31 +958,26 @@ function enterEditMode() {
   document.getElementById('stage').innerHTML = '<div class="empty-hint">Переменных пока нет</div>';
   document.getElementById('consoleLog').innerHTML = '';
   setStatus('');
-  segments = []; stepInputs = []; consoleLog = []; lastVarsSnapshot = {}; currentStep = 0;
+  stepInputs = []; consoleLog = []; lastVarsSnapshot = {}; currentStep = 0; programDone = false;
 }
 
 async function prepareAndStart() {
   const code = document.getElementById('codeInput').value;
-  let segsJson;
+  ns = freshNamespace();
   try {
-    pyodide.globals.set('_src_to_parse', code);
-    segsJson = pyodide.runPython('_parse_segments(_src_to_parse)');
+    ns.set('_src_for_start', code);
+    pyodide.runPython('_start_program(_src_for_start)', { globals: ns });
   } catch (err) {
     alert('Ошибка синтаксиса в коде:\n' + cleanPyError(err.message || String(err)));
     return;
   }
-  segments = JSON.parse(segsJson);
-  if (segments.length === 0) {
-    alert('Код пустой — нечего выполнять.');
-    return;
-  }
+  currentCode = code;
   stepInputs = [];
   consoleLog = [];
   lastVarsSnapshot = {};
   currentStep = 0;
-  ns = freshNamespace();
+  programDone = false;
 
-  running = true;
   document.getElementById('codeInput').style.display = 'none';
   document.getElementById('examplesRow').style.display = 'none';
   document.getElementById('prepareBtn').style.display = 'none';
